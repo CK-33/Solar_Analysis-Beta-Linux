@@ -1,0 +1,26 @@
+# Dados
+dados/*.csv
+dados/analise_*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Output
+analise_ffpr_*/
+*.png
+Relatorio_Alertas.txt
+Dados_Alertas.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
