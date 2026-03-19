@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Sistema de Análise Fotovoltaica
+Comment=Análise de FF, PR e detecção de sujidade em painéis solares
+Exec=bash /home/f22/.gemini/antigravity/scratch/solar_analysis/run.sh
+Icon=solar_power
+Terminal=false
+Categories=Science;Education;
+StartupNotify=true

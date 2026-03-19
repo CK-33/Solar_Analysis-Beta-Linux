@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import CONFIG_SISTEMA, CONFIG_ALERTAS
 from src.analisador_core import executar_analise, MAPA_GRAFICOS
 from src.gerenciador_alertas import GerenciadorAlertas
+from src.ingestion.gui_wizard import ImportWizard
 
 
 # ============================================================
@@ -50,7 +51,7 @@ class SolarAnalysisGUI:
         self.root = root
         self.root.title("Sistema de Análise Fotovoltaica")
         self.root.configure(bg=CORES['bg'])
-        self.root.state('zoomed')  # Maximizado no Windows
+        self.root.attributes('-zoomed', True)  # Maximizado no Ubuntu/Linux
         self.root.minsize(1200, 700)
 
         # Estado
@@ -76,15 +77,15 @@ class SolarAnalysisGUI:
         style.configure('Dark.TFrame', background=CORES['bg'])
         style.configure('Panel.TFrame', background=CORES['bg_painel'])
         style.configure('Dark.TLabel', background=CORES['bg_painel'],
-                        foreground=CORES['fg'], font=('Segoe UI', 10))
+                        foreground=CORES['fg'], font=('DejaVu Sans', 10))
         style.configure('Title.TLabel', background=CORES['bg'],
-                        foreground=CORES['fg_titulo'], font=('Segoe UI', 16, 'bold'))
+                        foreground=CORES['fg_titulo'], font=('DejaVu Sans', 16, 'bold'))
         style.configure('Section.TLabel', background=CORES['bg_painel'],
-                        foreground=CORES['fg_destaque'], font=('Segoe UI', 10, 'bold'))
+                        foreground=CORES['fg_destaque'], font=('DejaVu Sans', 10, 'bold'))
         style.configure('Metric.TLabel', background=CORES['bg_painel'],
-                        foreground=CORES['fg'], font=('Consolas', 10))
+                        foreground=CORES['fg'], font=('DejaVu Sans Mono', 10))
         style.configure('Dark.TCheckbutton', background=CORES['bg_painel'],
-                        foreground=CORES['fg'], font=('Segoe UI', 9))
+                        foreground=CORES['fg'], font=('DejaVu Sans', 9))
 
     def _criar_layout(self):
         """Cria o layout principal: painel esquerdo + painel direito."""
@@ -93,10 +94,10 @@ class SolarAnalysisGUI:
         header.pack(fill='x', padx=10, pady=(10, 5))
         header.pack_propagate(False)
 
-        tk.Label(header, text="✦", font=('Segoe UI', 18), bg=CORES['bg'],
+        tk.Label(header, text="✦", font=('DejaVu Sans', 18), bg=CORES['bg'],
                  fg=CORES['fg_destaque']).pack(side='left', padx=(10, 5))
         tk.Label(header, text="Sistema de Análise Fotovoltaica",
-                 font=('Segoe UI', 16, 'bold'), bg=CORES['bg'],
+                 font=('DejaVu Sans', 16, 'bold'), bg=CORES['bg'],
                  fg=CORES['fg_titulo']).pack(side='left')
 
         # Container principal
@@ -130,19 +131,19 @@ class SolarAnalysisGUI:
         frame = tk.Frame(self.painel_esquerdo, bg=CORES['bg_painel'])
         frame.pack(fill='x', padx=10, pady=(10, 5))
 
-        tk.Label(frame, text="ARQUIVO CSV", font=('Segoe UI', 10, 'bold'),
+        tk.Label(frame, text="ARQUIVO CSV", font=('DejaVu Sans', 10, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w')
 
         row = tk.Frame(frame, bg=CORES['bg_painel'])
         row.pack(fill='x', pady=(5, 0))
 
         self.entry_csv = tk.Entry(row, textvariable=self.caminho_csv,
-                                   font=('Consolas', 9), bg=CORES['bg_input'],
+                                   font=('DejaVu Sans Mono', 9), bg=CORES['bg_input'],
                                    fg=CORES['fg'], insertbackground=CORES['fg'],
                                    relief='flat', bd=5)
         self.entry_csv.pack(side='left', fill='x', expand=True, padx=(0, 5))
 
-        btn_procurar = tk.Button(row, text="Procurar...", font=('Segoe UI', 9),
+        btn_procurar = tk.Button(row, text="Procurar...", font=('DejaVu Sans', 9),
                                   bg=CORES['bg_botao'], fg=CORES['fg'],
                                   activebackground=CORES['bg_botao_hover'],
                                   activeforeground=CORES['fg_titulo'],
@@ -150,17 +151,25 @@ class SolarAnalysisGUI:
                                   command=self._procurar_csv)
         btn_procurar.pack(side='right')
 
+        btn_importar = tk.Button(row, text="Importar/Converter...", font=('DejaVu Sans', 9),
+                                  bg=CORES['bg_botao_primario'], fg='white',
+                                  activebackground=CORES['bg_botao_primario_hover'],
+                                  activeforeground='white',
+                                  relief='flat', bd=0, padx=15, pady=5,
+                                  command=self._abrir_wizard_importacao)
+        btn_importar.pack(side='right', padx=(0, 5))
+
     def _criar_secao_acoes(self):
         """Seção: Botões de ação."""
         frame = tk.Frame(self.painel_esquerdo, bg=CORES['bg_painel'])
         frame.pack(fill='x', padx=10, pady=5)
 
-        tk.Label(frame, text="AÇÕES", font=('Segoe UI', 10, 'bold'),
+        tk.Label(frame, text="AÇÕES", font=('DejaVu Sans', 10, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w', pady=(0, 5))
 
         # Botão 1: Análise Completa
         btn1 = tk.Button(frame, text="▶  Análise Completa (FF + PR + Alertas)",
-                          font=('Segoe UI', 10, 'bold'),
+                          font=('DejaVu Sans', 10, 'bold'),
                           bg=CORES['bg_botao_primario'], fg='white',
                           activebackground=CORES['bg_botao_primario_hover'],
                           activeforeground='white',
@@ -170,7 +179,7 @@ class SolarAnalysisGUI:
 
         # Botão 2: Apenas Análise FF/PR
         btn2 = tk.Button(frame, text="📊  Apenas Análise FF / PR",
-                          font=('Segoe UI', 10),
+                          font=('DejaVu Sans', 10),
                           bg=CORES['bg_botao'], fg=CORES['fg'],
                           activebackground=CORES['bg_botao_hover'],
                           activeforeground='white',
@@ -180,7 +189,7 @@ class SolarAnalysisGUI:
 
         # Botão 3: Apenas Alertas
         btn3 = tk.Button(frame, text="⚠  Apenas Alertas de Sujidade",
-                          font=('Segoe UI', 10),
+                          font=('DejaVu Sans', 10),
                           bg=CORES['bg_botao_alerta'], fg='white',
                           activebackground=CORES['bg_botao_alerta_hover'],
                           activeforeground='white',
@@ -193,7 +202,7 @@ class SolarAnalysisGUI:
         frame = tk.Frame(self.painel_esquerdo, bg=CORES['bg_painel'])
         frame.pack(fill='x', padx=10, pady=5)
 
-        tk.Label(frame, text="ESCOLHER GRÁFICOS", font=('Segoe UI', 10, 'bold'),
+        tk.Label(frame, text="ESCOLHER GRÁFICOS", font=('DejaVu Sans', 10, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w', pady=(0, 5))
 
         grid = tk.Frame(frame, bg=CORES['bg_painel'])
@@ -209,12 +218,12 @@ class SolarAnalysisGUI:
         }
 
         for i, (num, nome) in enumerate(nomes.items()):
-            var = tk.BooleanVar(value=False)
+            var = tk.BooleanVar(value=True)
             self.graficos_vars[num] = var
             col = i % 2
             row = i // 2
             cb = tk.Checkbutton(grid, text=nome, variable=var,
-                                 font=('Segoe UI', 9), bg=CORES['bg_painel'],
+                                 font=('DejaVu Sans', 9), bg=CORES['bg_painel'],
                                  fg=CORES['fg'], selectcolor=CORES['bg_input'],
                                  activebackground=CORES['bg_painel'],
                                  activeforeground=CORES['fg'])
@@ -225,7 +234,7 @@ class SolarAnalysisGUI:
         frame = tk.Frame(self.painel_esquerdo, bg=CORES['bg_painel'])
         frame.pack(fill='x', padx=10, pady=5)
 
-        tk.Label(frame, text="MÉTRICAS", font=('Segoe UI', 10, 'bold'),
+        tk.Label(frame, text="MÉTRICAS", font=('DejaVu Sans', 10, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w', pady=(0, 5))
 
         self.metricas_labels = {}
@@ -236,6 +245,8 @@ class SolarAnalysisGUI:
             ("Ev. Limpeza:", "num_limpezas"),
             ("Dias Críticos:", "dias_criticos"),
             ("Dias Estáveis:", "dias_estaveis"),
+            ("IHE (Saúde FF):", "ihe"),
+            ("Saúde Elét.:", "status_eletrico"),
             ("Recomendação:", "recomendacao"),
         ]
 
@@ -243,11 +254,11 @@ class SolarAnalysisGUI:
             row = tk.Frame(frame, bg=CORES['bg_painel'])
             row.pack(fill='x', pady=1)
 
-            tk.Label(row, text=texto, font=('Segoe UI', 9),
+            tk.Label(row, text=texto, font=('DejaVu Sans', 9),
                      bg=CORES['bg_painel'], fg=CORES['fg_label'],
                      width=18, anchor='w').pack(side='left')
 
-            lbl = tk.Label(row, text="—", font=('Consolas', 9),
+            lbl = tk.Label(row, text="—", font=('DejaVu Sans Mono', 9),
                            bg=CORES['bg_painel'], fg=CORES['fg'], anchor='w')
             lbl.pack(side='left', fill='x', expand=True)
             self.metricas_labels[chave] = lbl
@@ -257,11 +268,11 @@ class SolarAnalysisGUI:
         frame = tk.Frame(self.painel_esquerdo, bg=CORES['bg_painel'])
         frame.pack(fill='both', expand=True, padx=10, pady=(5, 10))
 
-        tk.Label(frame, text="LOG DE EXECUÇÃO", font=('Segoe UI', 10, 'bold'),
+        tk.Label(frame, text="LOG DE EXECUÇÃO", font=('DejaVu Sans', 10, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w', pady=(0, 5))
 
         self.log_text = scrolledtext.ScrolledText(
-            frame, font=('Consolas', 8), bg='#0d1117', fg='#c9d1d9',
+            frame, font=('DejaVu Sans Mono', 8), bg='#0d1117', fg='#c9d1d9',
             insertbackground=CORES['fg'], relief='flat', bd=5, height=8,
             wrap='word'
         )
@@ -283,7 +294,7 @@ class SolarAnalysisGUI:
 
         for nome, texto in [("graficos", "📊 Gráficos"), ("relatorio", "📋 Relatório"),
                              ("config", "⚙ Config")]:
-            btn = tk.Button(tab_bar, text=texto, font=('Segoe UI', 10),
+            btn = tk.Button(tab_bar, text=texto, font=('DejaVu Sans', 10),
                              bg=CORES['tab_ativo'] if nome == 'graficos' else CORES['tab_inativo'],
                              fg='white', relief='flat', bd=0, padx=20, pady=8,
                              command=lambda n=nome: self._trocar_aba(n))
@@ -291,7 +302,7 @@ class SolarAnalysisGUI:
             self.botoes_abas[nome] = btn
 
         # Indicador "Concluído"
-        self.label_status = tk.Label(tab_bar, text="", font=('Segoe UI', 9),
+        self.label_status = tk.Label(tab_bar, text="", font=('DejaVu Sans', 9),
                                       bg=CORES['bg'], fg=CORES['verde'])
         self.label_status.pack(side='right', padx=10)
 
@@ -312,17 +323,17 @@ class SolarAnalysisGUI:
         nav = tk.Frame(self.frame_graficos, bg=CORES['bg_painel'])
         nav.pack(fill='x', padx=5, pady=(0, 5))
 
-        self.btn_prev = tk.Button(nav, text="◀ Anterior", font=('Segoe UI', 9),
+        self.btn_prev = tk.Button(nav, text="◀ Anterior", font=('DejaVu Sans', 9),
                                    bg=CORES['bg_botao'], fg=CORES['fg'],
                                    relief='flat', bd=0, padx=10, pady=3,
                                    command=self._grafico_anterior)
         self.btn_prev.pack(side='left')
 
-        self.label_grafico_nome = tk.Label(nav, text="", font=('Segoe UI', 10),
+        self.label_grafico_nome = tk.Label(nav, text="", font=('DejaVu Sans', 10),
                                             bg=CORES['bg_painel'], fg=CORES['fg_destaque'])
         self.label_grafico_nome.pack(side='left', fill='x', expand=True)
 
-        self.btn_next = tk.Button(nav, text="Próximo ▶", font=('Segoe UI', 9),
+        self.btn_next = tk.Button(nav, text="Próximo ▶", font=('DejaVu Sans', 9),
                                    bg=CORES['bg_botao'], fg=CORES['fg'],
                                    relief='flat', bd=0, padx=10, pady=3,
                                    command=self._proximo_grafico)
@@ -333,7 +344,7 @@ class SolarAnalysisGUI:
         self.frames_abas['relatorio'] = self.frame_relatorio
 
         self.relatorio_text = scrolledtext.ScrolledText(
-            self.frame_relatorio, font=('Consolas', 10), bg='#0d1117',
+            self.frame_relatorio, font=('DejaVu Sans Mono', 10), bg='#0d1117',
             fg='#c9d1d9', relief='flat', bd=10, wrap='word'
         )
         self.relatorio_text.pack(fill='both', expand=True, padx=5, pady=5)
@@ -357,7 +368,7 @@ class SolarAnalysisGUI:
         scrollbar.pack(side='right', fill='y')
 
         # CONFIG_SISTEMA
-        tk.Label(scroll_frame, text="CONFIG_SISTEMA", font=('Segoe UI', 12, 'bold'),
+        tk.Label(scroll_frame, text="CONFIG_SISTEMA", font=('DejaVu Sans', 12, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w', padx=10, pady=(10, 5))
 
         self.config_entries = {}
@@ -366,11 +377,11 @@ class SolarAnalysisGUI:
             row = tk.Frame(scroll_frame, bg=CORES['bg_painel'])
             row.pack(fill='x', padx=10, pady=2)
 
-            tk.Label(row, text=f"{chave}:", font=('Consolas', 9),
+            tk.Label(row, text=f"{chave}:", font=('DejaVu Sans Mono', 9),
                      bg=CORES['bg_painel'], fg=CORES['fg_label'],
                      width=20, anchor='w').pack(side='left')
 
-            entry = tk.Entry(row, font=('Consolas', 9), bg=CORES['bg_input'],
+            entry = tk.Entry(row, font=('DejaVu Sans Mono', 9), bg=CORES['bg_input'],
                               fg=CORES['fg'], relief='flat', bd=3, width=20,
                               insertbackground=CORES['fg'])
             entry.insert(0, str(valor))
@@ -378,18 +389,18 @@ class SolarAnalysisGUI:
             self.config_entries[('sistema', chave)] = entry
 
         # CONFIG_ALERTAS
-        tk.Label(scroll_frame, text="CONFIG_ALERTAS", font=('Segoe UI', 12, 'bold'),
+        tk.Label(scroll_frame, text="CONFIG_ALERTAS", font=('DejaVu Sans', 12, 'bold'),
                  bg=CORES['bg_painel'], fg=CORES['fg_destaque']).pack(anchor='w', padx=10, pady=(15, 5))
 
         for chave, valor in CONFIG_ALERTAS.items():
             row = tk.Frame(scroll_frame, bg=CORES['bg_painel'])
             row.pack(fill='x', padx=10, pady=2)
 
-            tk.Label(row, text=f"{chave}:", font=('Consolas', 9),
+            tk.Label(row, text=f"{chave}:", font=('DejaVu Sans Mono', 9),
                      bg=CORES['bg_painel'], fg=CORES['fg_label'],
                      width=20, anchor='w').pack(side='left')
 
-            entry = tk.Entry(row, font=('Consolas', 9), bg=CORES['bg_input'],
+            entry = tk.Entry(row, font=('DejaVu Sans Mono', 9), bg=CORES['bg_input'],
                               fg=CORES['fg'], relief='flat', bd=3, width=20,
                               insertbackground=CORES['fg'])
             entry.insert(0, str(valor))
@@ -424,6 +435,17 @@ class SolarAnalysisGUI:
         )
         if caminho:
             self.caminho_csv.set(caminho)
+
+    def _abrir_wizard_importacao(self):
+        """Abre o assistente de importação."""
+        wizard = ImportWizard(self.root, CORES, on_success_callback=self._on_import_success)
+        wizard.grab_set()
+
+    def _on_import_success(self, caminho_final):
+        """Callback chamado pelo wizard ao finalizar com sucesso."""
+        self.caminho_csv.set(caminho_final)
+        self._log(f"📥 Novo arquivo importado e selecionado: {caminho_final}")
+        # Sugere análise automática? Talvez não para não assustar o usuário.
 
     def _log(self, msg):
         """Adiciona mensagem ao log (thread-safe)."""
@@ -616,6 +638,8 @@ class SolarAnalysisGUI:
             'num_limpezas': lambda v: str(v),
             'dias_criticos': lambda v: str(v),
             'dias_estaveis': lambda v: str(v),
+            'ihe': lambda v: f"{v:.3f} ({v * 100:.1f}%)" if v is not None else "—",
+            'status_eletrico': lambda v: str(v),
             'recomendacao': lambda v: str(v),
         }
 
@@ -630,6 +654,21 @@ class SolarAnalysisGUI:
                         if 'CRÍTICO' in texto:
                             lbl.config(fg=CORES['vermelho'])
                         elif 'ATENÇÃO' in texto or 'SUJANDO' in texto:
+                            lbl.config(fg=CORES['amarelo'])
+                        else:
+                            lbl.config(fg=CORES['verde'])
+                    elif chave == 'status_eletrico':
+                        if 'CRÍTICO' in texto:
+                            lbl.config(fg=CORES['vermelho'])
+                        elif 'ATENÇÃO' in texto:
+                            lbl.config(fg=CORES['amarelo'])
+                        elif 'NORMAL' in texto:
+                            lbl.config(fg=CORES['verde'])
+                    elif chave == 'ihe' and metricas['ihe'] is not None:
+                        v = metricas['ihe']
+                        if v < 0.90:
+                            lbl.config(fg=CORES['vermelho'])
+                        elif v < 0.95:
                             lbl.config(fg=CORES['amarelo'])
                         else:
                             lbl.config(fg=CORES['verde'])

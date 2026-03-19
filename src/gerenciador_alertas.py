@@ -72,21 +72,25 @@ class GerenciadorAlertas:
         falhas_datalogger = self._detectar_falha_datalogger(df)
 
         for falha in falhas_eletricas:
-            log(f"   ⚡ ELECTRICAL FAULT: {falha['inicio'].strftime('%d/%m/%Y %H:%M')} → "
+            log(f"   ⚡ ELECTRICAL FAULT (horário): {falha['inicio'].strftime('%d/%m/%Y %H:%M')} → "
                 f"{falha['fim'].strftime('%d/%m/%Y %H:%M')} ({falha['duracao_h']:.1f}h)")
 
         for gap in falhas_datalogger:
-            log(f"   📡 GAP DATALOGGER: {gap['inicio'].strftime('%d/%m/%Y %H:%M')} → "
+            log(f"   📡 GAP DATALOGGER (ausência de dados): {gap['inicio'].strftime('%d/%m/%Y %H:%M')} → "
                 f"{gap['fim'].strftime('%d/%m/%Y %H:%M')} ({gap['duracao_h']:.1f}h)")
 
         if not falhas_eletricas:
-            log("   ✓ Nenhuma falha elétrica detectada")
+            log("   ✓ Nenhuma falha elétrica horária detectada")
         if not falhas_datalogger:
-            log("   ✓ Nenhuma falha de datalogger detectada")
+            log("   ✓ Nenhuma ausência de dados detectada")
 
         # 1. Prepara dados diários
         log("\n📊 Preparando dados diários para análise...")
         df_diario_completo = self._preparar_dados_diarios(df, log)
+
+        # 1b. Detecção diária de falha elétrica (PR baixo com irradiância boa)
+        log("\n⚡ Detectando possíveis falhas elétricas diárias (PR baixo com boa irradiância)...")
+        falhas_eletricas_diarias = self._detectar_electrical_fault_diario(df_diario_completo, log)
 
         # 2. Aplica janela deslizante
         log(f"\n🪟 Aplicando janela deslizante de {self.config['janela_semanas']} semanas...")
@@ -96,9 +100,10 @@ class GerenciadorAlertas:
         log("\n📈 Calculando gradientes (velocidades de mudança)...")
         df_diario = self._calcular_gradientes(df_diario, log)
 
-        # 4. Calcula consenso FF + PR
-        log("🤝 Calculando consenso entre FF e PR...")
-        df_diario = self._calcular_consenso(df_diario, log)
+        # 4. Calcula sinais de sujidade (PR) e saúde elétrica (FF/IHE)
+        log("📡 Calculando sinal de sujidade (PR) e Índice de Saúde Elétrica (FF)...")
+        df_diario, ihe = self._calcular_sinais(df_diario, df_diario_completo, log)
+        self._ihe = ihe  # persiste para relatório e métricas
 
         # 5. Detecta eventos
         log("🔍 Detectando eventos de sujidade...")
@@ -114,7 +119,9 @@ class GerenciadorAlertas:
 
         # 8. Gera relatório
         log("📋 Gerando relatório de alertas...")
-        relatorio = self._gerar_relatorio(df_diario, eventos, falhas_eletricas, falhas_datalogger)
+        relatorio = self._gerar_relatorio(
+            df_diario, eventos, falhas_eletricas, falhas_datalogger, falhas_eletricas_diarias
+        )
 
         # Salva resultados
         self.resultados = {
@@ -122,8 +129,9 @@ class GerenciadorAlertas:
             'eventos': eventos,
             'relatorio': relatorio,
             'falhas_eletricas': falhas_eletricas,
+            'falhas_eletricas_diarias': falhas_eletricas_diarias,
             'falhas_datalogger': falhas_datalogger,
-            'metricas': self._calcular_metricas_resumo(df_diario, eventos)
+            'metricas': self._calcular_metricas_resumo(df_diario, eventos, getattr(self, '_ihe', None))
         }
 
         log("\n✅ Análise de sujidade concluída!")
@@ -284,48 +292,58 @@ class GerenciadorAlertas:
 
         return df_diario
 
-    def _calcular_consenso(self, df_diario, log):
-        """Calcula consenso entre FF e PR."""
+    def _calcular_sinais(self, df_diario, df_completo, log):
+        """
+        Separa os dois papéis:
+        - Vel_PR: sinal primário de sujidade (queda operacional)
+        - IHE: Índice de Saúde Elétrica baseado em FF vs baseline (degradação estrutural)
+
+        Confiança é calculada sobre a estabilidade do próprio PR.
+        """
         if len(df_diario) == 0:
-            log("   ⚠️  DataFrame vazio, pulando consenso")
-            return df_diario
+            log("   ⚠️  DataFrame vazio, pulando cálculo de sinais")
+            return df_diario, None
 
-        df_diario['Consenso'] = (df_diario['Vel_FF'] + df_diario['Vel_PR']) / 2
+        # --- Sinal de sujidade: PR ---
+        # Confiança baseada na consistência dos gradientes de PR dentro da janela
+        std_pr = df_diario['Vel_PR'].std()
+        mean_abs_pr = df_diario['Vel_PR'].abs().mean()
+        if mean_abs_pr > 0.0001:
+            df_diario['Confianca'] = float(np.clip(1 - (std_pr / (mean_abs_pr + std_pr)), 0, 1))
+        else:
+            df_diario['Confianca'] = 1.0
 
-        divergencia = np.abs(df_diario['Vel_FF'] - df_diario['Vel_PR'])
-        vel_max = np.maximum(np.abs(df_diario['Vel_FF']), np.abs(df_diario['Vel_PR']))
-
-        df_diario['Confianca'] = np.where(
-            vel_max > 0.001,
-            1 - (divergencia / vel_max).clip(0, 1),
-            1.0
-        )
-
-        def classificar_direcao(row):
-            if row['Vel_FF'] < 0 and row['Vel_PR'] < 0:
-                return "CAINDO"
-            elif row['Vel_FF'] > 0 and row['Vel_PR'] > 0:
-                return "SUBINDO"
-            elif abs(row['Vel_FF']) < 0.001 and abs(row['Vel_PR']) < 0.001:
-                return "ESTÁVEL"
-            else:
-                return "DIVERGENTE"
-
-        df_diario['Direcao'] = df_diario.apply(classificar_direcao, axis=1)
-
+        vel_pr_media = df_diario['Vel_PR'].mean() * 7 * 100
         conf_media = df_diario['Confianca'].mean() * 100
-        log(f"   ✓ Confiança média: {conf_media:.1f}%")
+        log(f"   ✓ Velocidade PR média: {vel_pr_media:.2f}%/semana")
+        log(f"   ✓ Confiança (PR): {conf_media:.1f}%")
 
-        for direcao in ['CAINDO', 'SUBINDO', 'ESTÁVEL', 'DIVERGENTE']:
-            count = (df_diario['Direcao'] == direcao).sum()
-            if count > 0:
-                pct = count / len(df_diario) * 100
-                log(f"     • {direcao}: {count} dias ({pct:.1f}%)")
+        # --- Índice de Saúde Elétrica (IHE): FF atual vs baseline ---
+        # Baseline = média de FF de todo o período de dados disponível
+        # df_completo é o df_diario_completo (dados diários), coluna 'FF_Diario'
+        ff_col = 'FF_Diario' if 'FF_Diario' in df_completo.columns else None
+        ihe = None
+        if ff_col is not None:
+            ff_baseline = df_completo[ff_col].mean()
+            ff_janela = df_diario['FF_Diario'].mean()
+            if ff_baseline > 0.01:
+                ihe = ff_janela / ff_baseline
+                if ihe < 0.90:
+                    status_eletrico = "CRÍTICO"
+                elif ihe < 0.95:
+                    status_eletrico = "ATENÇÃO"
+                else:
+                    status_eletrico = "NORMAL"
+                log(f"   ✓ IHE (FF atual/baseline): {ihe:.3f} → {status_eletrico}")
 
-        return df_diario
+        return df_diario, ihe
 
     def _detectar_eventos(self, df_diario, log):
-        """Detecta eventos de limpeza e degradação."""
+        """Detecta eventos de limpeza e degradação (baseado em PR).
+
+        Nota: os limiares em CONFIG_ALERTAS são em unidades semanais (fração/semana).
+        Vel_PR e Vel_PR_3d são em fração/dia, portanto multiplicamos por 7 antes de comparar.
+        """
         eventos = {
             'limpeza': [],
             'degradacao_critica': [],
@@ -336,28 +354,29 @@ class GerenciadorAlertas:
             log("   ⚠️  Nenhum dado para detectar eventos")
             return eventos
 
-        # Eventos de limpeza
+        # Velocidades semanais para comparação com limiares
+        vel_pr_sem = df_diario['Vel_PR'] * 7
+        vel_pr_3d_sem = df_diario['Vel_PR_3d'] * 7
+
+        # Eventos de limpeza: PR com alta positiva rápida de 3 dias
         df_diario['Evento_Limpeza'] = (
-            (df_diario['Vel_FF_3d'] > self.config['limiar_limpeza']) &
-            (df_diario['Vel_PR_3d'] > self.config['limiar_limpeza'])
+            vel_pr_3d_sem > self.config['limiar_limpeza']
         )
 
         for idx, row in df_diario[df_diario['Evento_Limpeza']].iterrows():
             eventos['limpeza'].append({
                 'data': idx,
-                'vel_ff': row['Vel_FF_3d'] * 7 * 100,
                 'vel_pr': row['Vel_PR_3d'] * 7 * 100,
-                'magnitude': row['Consenso'] * 7 * 100
+                'magnitude': row['Vel_PR_3d'] * 7 * 100
             })
 
-        log(f"   🌧️  Eventos de limpeza: {len(eventos['limpeza'])}")
+        log(f"   🌧️  Eventos de limpeza (PR): {len(eventos['limpeza'])}")
         for evt in eventos['limpeza']:
             log(f"      • {evt['data'].strftime('%d/%m/%Y')}: +{evt['magnitude']:.1f}%/sem")
 
-        # Degradação crítica
+        # Degradação crítica: PR caindo com confiança suficiente
         df_diario['Degradacao_Critica'] = (
-            (df_diario['Consenso'] < self.config['limiar_atencao']) &
-            (df_diario['Direcao'] == 'CAINDO') &
+            (vel_pr_sem < self.config['limiar_atencao']) &
             (df_diario['Confianca'] > self.config['confianca_minima'])
         )
 
@@ -365,10 +384,10 @@ class GerenciadorAlertas:
         log(f"   🔴 Dias em degradação crítica: {dias_criticos} "
             f"({dias_criticos / len(df_diario) * 100:.1f}%)")
 
-        # Períodos estáveis
+        # Períodos estáveis: PR dentro da banda estável
         df_diario['Periodo_Estavel'] = (
-            (df_diario['Consenso'] >= self.config['limiar_estavel_min']) &
-            (df_diario['Consenso'] <= self.config['limiar_estavel_max'])
+            (vel_pr_sem >= self.config['limiar_estavel_min']) &
+            (vel_pr_sem <= self.config['limiar_estavel_max'])
         )
 
         dias_estaveis = df_diario['Periodo_Estavel'].sum()
@@ -377,33 +396,36 @@ class GerenciadorAlertas:
         return eventos
 
     def _classificar_status(self, df_diario, log):
-        """Classifica status diário do sistema."""
+        """Classifica status diário de sujidade com base em Vel_PR.
+
+        Nota: limiares são em unidades semanais; Vel_PR é diário, por isso multiplica-se por 7.
+        """
         if len(df_diario) == 0:
             log("   ⚠️  Nenhum dado para classificar")
             return df_diario
 
         def classificar(row):
-            vel = row['Consenso']
+            vel_sem = row['Vel_PR'] * 7   # converte para unidade semanal
             conf = row['Confianca']
 
             if row.get('Evento_Limpeza', False):
                 return "🌧️ LIMPEZA"
             if conf < self.config['confianca_minima']:
-                return "⚠️ DIVERGENTE"
-            if vel < self.config['limiar_critico']:
+                return "⚠️ INCERTO"
+            if vel_sem < self.config['limiar_critico']:
                 return "🔴 CRÍTICO"
-            elif vel < self.config['limiar_atencao']:
+            elif vel_sem < self.config['limiar_atencao']:
                 return "🟡 SUJANDO"
-            elif vel > self.config['limiar_limpeza']:
+            elif vel_sem > self.config['limiar_limpeza']:
                 return "🟢 RECUPERANDO"
-            elif self.config['limiar_estavel_min'] <= vel <= self.config['limiar_estavel_max']:
+            elif self.config['limiar_estavel_min'] <= vel_sem <= self.config['limiar_estavel_max']:
                 return "🟢 ESTÁVEL"
             else:
                 return "🟡 MUDANÇA LEVE"
 
         df_diario['Status'] = df_diario.apply(classificar, axis=1)
 
-        log("   ✓ Distribuição de status:")
+        log("   ✓ Distribuição de status (PR):")
         for status in df_diario['Status'].unique():
             count = (df_diario['Status'] == status).sum()
             pct = count / len(df_diario) * 100
@@ -459,13 +481,9 @@ class GerenciadorAlertas:
         ax1.grid(True, alpha=0.3)
         ax1.set_ylim(0, 1.0)
 
-        # Painel 2: Velocidades e consenso
-        ax2.plot(df_diario.index, df_diario['Vel_FF'] * 100, color='purple',
-                 linewidth=1.5, label='Vel. FF', alpha=0.7)
+        # Painel 2: Velocidade de PR (sinal de sujidade)
         ax2.plot(df_diario.index, df_diario['Vel_PR'] * 100, color='darkblue',
-                 linewidth=1.5, label='Vel. PR', alpha=0.7, linestyle='--')
-        ax2.plot(df_diario.index, df_diario['Consenso'] * 100, color='black',
-                 linewidth=2, label='Consenso')
+                 linewidth=2, label='Vel. PR', alpha=0.85)
 
         ax2.axhline(y=0, color='gray', linewidth=1, alpha=0.5)
         ax2.axhline(y=self.config['limiar_atencao'] * 100, color='orange',
@@ -473,14 +491,14 @@ class GerenciadorAlertas:
         ax2.axhline(y=self.config['limiar_critico'] * 100, color='red',
                     linestyle='--', alpha=0.6, label='Crítico')
 
-        ax2.fill_between(df_diario.index, 0, df_diario['Consenso'] * 100,
-                         where=(df_diario['Consenso'] < 0), color='red', alpha=0.2)
-        ax2.fill_between(df_diario.index, 0, df_diario['Consenso'] * 100,
-                         where=(df_diario['Consenso'] >= 0), color='green', alpha=0.2)
+        ax2.fill_between(df_diario.index, 0, df_diario['Vel_PR'] * 100,
+                         where=(df_diario['Vel_PR'] < 0), color='red', alpha=0.2)
+        ax2.fill_between(df_diario.index, 0, df_diario['Vel_PR'] * 100,
+                         where=(df_diario['Vel_PR'] >= 0), color='green', alpha=0.2)
 
-        ax2.set_ylabel('Velocidade (%/dia)', fontsize=12)
-        ax2.set_title('Velocidade de Degradação', fontsize=12)
-        ax2.legend(loc='upper right', fontsize=9, ncol=2)
+        ax2.set_ylabel('Velocidade PR (%/dia)', fontsize=12)
+        ax2.set_title('Velocidade de Degradação (PR)', fontsize=12)
+        ax2.legend(loc='upper right', fontsize=9)
         ax2.grid(True, alpha=0.3)
 
         # Painel 3: Confiança
@@ -562,20 +580,20 @@ class GerenciadorAlertas:
         r.append(f"   🟢 Dias estáveis: {dias_estaveis}")
         r.append("")
 
-        # Velocidades
-        vel_consenso = df_diario['Consenso'].mean() * 7 * 100
-        r.append("📈 TENDÊNCIA GERAL:")
-        r.append(f"   Velocidade: {vel_consenso:.2f}%/semana")
+        # Tendência de sujidade (PR)
+        vel_pr = df_diario['Vel_PR'].mean() * 7 * 100
+        r.append("📈 TENDÊNCIA DE SUJIDADE (PR):")
+        r.append(f"   Velocidade PR: {vel_pr:.2f}%/semana")
         r.append(f"   Confiança: {df_diario['Confianca'].mean() * 100:.1f}%")
         r.append("")
 
-        # Diagnóstico
-        r.append("💡 DIAGNÓSTICO:")
-        if vel_consenso < self.config['limiar_critico'] * 7 * 100:
+        # Diagnóstico de sujidade
+        r.append("💡 DIAGNÓSTICO DE SUJIDADE:")
+        if vel_pr < self.config['limiar_critico'] * 7 * 100:
             r.append("   🔴 CRÍTICO: Degradação rápida - Limpeza URGENTE")
-        elif vel_consenso < self.config['limiar_atencao'] * 7 * 100:
+        elif vel_pr < self.config['limiar_atencao'] * 7 * 100:
             r.append("   🟡 ATENÇÃO: Sistema sujando progressivamente")
-        elif vel_consenso > self.config['limiar_limpeza'] * 7 * 100:
+        elif vel_pr > self.config['limiar_limpeza'] * 7 * 100:
             r.append("   🟢 RECUPERANDO: Sistema em melhoria")
         else:
             r.append("   🟢 ESTÁVEL: Sem mudanças significativas")
@@ -586,13 +604,33 @@ class GerenciadorAlertas:
             r.append(f"\n🌧️  Última limpeza: {ultima.strftime('%d/%m/%Y')} ({dias_desde} dias atrás)")
 
         r.append("")
+
+        # Saúde elétrica (FF / IHE)
+        ihe = getattr(self, '_ihe', None)
+        r.append("🔧 SAÚDE ELÉTRICA (FF):")
+        if ihe is not None:
+            if ihe < 0.90:
+                status_eletrico = "🔴 CRÍTICO"
+                detalhe = "Possível degradação estrutural, envelhecimento ou falha de célula"
+            elif ihe < 0.95:
+                status_eletrico = "🟡 ATENÇÃO"
+                detalhe = "FF abaixo do baseline — monitorar evolução"
+            else:
+                status_eletrico = "🟢 NORMAL"
+                detalhe = "Fill Factor dentro do padrão histórico"
+            r.append(f"   IHE (FF atual / baseline): {ihe:.3f} ({ihe * 100:.1f}%)")
+            r.append(f"   Status: {status_eletrico} — {detalhe}")
+        else:
+            r.append("   ⚠️  IHE não disponível (dados de FF insuficientes)")
+
+        r.append("")
         r.append("=" * 70)
 
         texto = "\n".join(r)
         print("\n" + texto)
         return texto
 
-    def _calcular_metricas_resumo(self, df_diario, eventos):
+    def _calcular_metricas_resumo(self, df_diario, eventos, ihe=None):
         """Calcula métricas resumidas para exibição na GUI."""
         if len(df_diario) == 0:
             return {
@@ -602,41 +640,53 @@ class GerenciadorAlertas:
                 'num_limpezas': 0,
                 'dias_criticos': 0,
                 'dias_estaveis': 0,
-                'dias_para_limpeza': 999,
-                'recomendacao': "Dados insuficientes para análise"
+                'recomendacao': "Dados insuficientes para análise",
+                'ihe': None,
+                'status_eletrico': "—"
             }
 
-        vel_consenso = df_diario['Consenso'].mean()
+        vel_pr_dia = df_diario['Vel_PR'].mean()
+        vel_pr_sem = vel_pr_dia * 7   # converte para unidade semanal (igual aos limiares)
         confianca = df_diario['Confianca'].mean()
 
-        if vel_consenso < self.config['limiar_critico']:
+        if vel_pr_sem < self.config['limiar_critico']:
             status_geral = "🔴 CRÍTICO"
-        elif vel_consenso < self.config['limiar_atencao']:
+        elif vel_pr_sem < self.config['limiar_atencao']:
             status_geral = "🟡 ATENÇÃO"
-        elif vel_consenso > self.config['limiar_limpeza']:
+        elif vel_pr_sem > self.config['limiar_limpeza']:
             status_geral = "🟢 RECUPERANDO"
         else:
             status_geral = "🟢 ESTÁVEL"
 
-        if vel_consenso < self.config['limiar_critico']:
-            dias_para_limpeza = 0
+        if vel_pr_sem < self.config['limiar_critico']:
             recomendacao = "Limpeza URGENTE recomendada"
-        elif vel_consenso < self.config['limiar_atencao']:
-            dias_para_limpeza = int(abs(0.10 / vel_consenso)) if vel_consenso < 0 else 999
-            recomendacao = f"Agendar limpeza em {dias_para_limpeza} dias"
+        elif vel_pr_sem < self.config['limiar_atencao']:
+            dias = int(abs(0.10 / vel_pr_sem) * 7) if vel_pr_sem < 0 else 999
+            recomendacao = f"Agendar limpeza em {dias} dias"
         else:
-            dias_para_limpeza = 999
             recomendacao = "Sistema em boas condições"
+
+        # IHE e status elétrico
+        if ihe is not None:
+            if ihe < 0.90:
+                status_eletrico = "🔴 CRÍTICO"
+            elif ihe < 0.95:
+                status_eletrico = "🟡 ATENÇÃO"
+            else:
+                status_eletrico = "🟢 NORMAL"
+        else:
+            status_eletrico = "—"
 
         return {
             'status_geral': status_geral,
-            'velocidade_degradacao': vel_consenso * 7,
+            'velocidade_degradacao': vel_pr_sem,   # semanal, consistente com display
             'confianca': confianca,
             'num_limpezas': len(eventos['limpeza']),
             'dias_criticos': (df_diario['Status'] == '🔴 CRÍTICO').sum(),
             'dias_estaveis': df_diario['Periodo_Estavel'].sum(),
-            'dias_para_limpeza': dias_para_limpeza,
-            'recomendacao': recomendacao
+            'recomendacao': recomendacao,
+            'ihe': ihe,
+            'status_eletrico': status_eletrico
         }
 
     def salvar_relatorio(self, caminho="Relatorio_Alertas.txt"):

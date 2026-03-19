@@ -24,3 +24,4 @@ Dados_Alertas.csv
 # OS
 Thumbs.db
 .DS_Store
+.venv/

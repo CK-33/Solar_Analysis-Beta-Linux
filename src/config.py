@@ -38,4 +38,8 @@ CONFIG_ALERTAS = {
     "potencia_max_fault": 10,     # Potência máxima para considerar como "zero" (W)
     "horas_min_fault": 3,         # Horas consecutivas para confirmar electrical fault
     "gap_min_horas": 2,           # Gap mínimo nos timestamps para falha de datalogger (horas)
+
+    # --- Detecção de falha elétrica diária (PR baixo com irradiância boa) ---
+    "pr_min_fault_diario": 0.20,  # PR diário abaixo deste valor com irradiância boa = suspeito
+    "irrad_min_fault_diario": 150, # Irradiância média diária mínima (W/m²) para considerar falha
 }

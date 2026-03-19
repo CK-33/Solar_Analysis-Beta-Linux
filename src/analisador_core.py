@@ -71,7 +71,7 @@ def selecionar_graficos():
 def carregar_dados(caminho_arquivo):
     """Carrega CSV e converte coluna Time para datetime."""
     df = pd.read_csv(caminho_arquivo)
-    df['Time'] = pd.to_datetime(df['Time'], format='%m.%d.%y %H:%M')
+    df['Time'] = pd.to_datetime(df['Time'], errors='coerce', format='mixed')
     df.set_index('Time', inplace=True)
     return df
 
@@ -135,6 +135,13 @@ def calcular_metricas(df, config):
     # Potência máxima teórica
     df['P_MAX_Calc'] = df['V_OC_Calc'] * df['I_SC_Calc']
 
+    # --- Detecção de Resolução Temporal ---
+    # Detecta o intervalo em minutos para escalar as janelas de cálculo
+    intervals = df.index.to_series().diff().dt.total_seconds().dropna() / 60
+    interval_min = int(intervals.median()) if len(intervals) > 0 else 60
+    periods_por_hora = 60 // max(1, interval_min)
+    periods_por_dia = 24 * periods_por_hora
+
     # Fill Factor
     df['FF'] = 0.0
     mask_valid_ff = df['P_MAX_Calc'] > 1
@@ -142,11 +149,13 @@ def calcular_metricas(df, config):
 
     df['FF_valido'] = df['FF'].where((df['FF'] > 0) & (df['FF'] < 1), np.nan)
 
+    # Janela da média móvel escalada pela resolução
+    janela_mm_periods = config["janela_mm"] * periods_por_hora
     df['FF_MediaMovel'] = df['FF_valido'].rolling(
-        window=config["janela_mm"], min_periods=24
+        window=janela_mm_periods, min_periods=periods_por_dia
     ).mean()
 
-    df['FF_Variacao_Diaria'] = df['FF_MediaMovel'].diff(periods=24)
+    df['FF_Variacao_Diaria'] = df['FF_MediaMovel'].diff(periods=periods_por_dia)
 
     # Máscara solar: ignora registros com baixa irradiância e fora do horário solar
     mask_sol = (G > 50) & (df.index.hour >= 6) & (df.index.hour <= 18)
@@ -160,10 +169,10 @@ def calcular_metricas(df, config):
     df['PR'] = df['PR'].clip(0, 1.1)
 
     df['PR_MediaMovel'] = df['PR'].rolling(
-        window=config["janela_mm"], min_periods=24
+        window=janela_mm_periods, min_periods=periods_por_dia
     ).mean()
 
-    df['PR_Variacao_Diaria'] = df['PR_MediaMovel'].diff(periods=24)
+    df['PR_Variacao_Diaria'] = df['PR_MediaMovel'].diff(periods=periods_por_dia)
 
     return df, mask_sol
 
