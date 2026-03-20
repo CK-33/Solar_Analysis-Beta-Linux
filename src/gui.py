@@ -6,7 +6,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext
+from tkinter import ttk, filedialog, scrolledtext, messagebox
 from PIL import Image, ImageTk
 
 # Adiciona diretório pai ao path
@@ -68,6 +68,19 @@ class SolarAnalysisGUI:
 
         # Monta layout
         self._criar_layout()
+
+        # Lembrete automático de configuração (500 ms após abrir)
+        self.root.after(500, self._mostrar_lembrete_config)
+
+    def _mostrar_lembrete_config(self):
+        messagebox.showinfo(
+            "Bem-vindo(a)!",
+            "Lembrete: Antes de iniciar sua análise, por favor confirme se os dados "
+            "da planta fotovoltaica (Potência Nominal, Coordenadas, I_sc, V_oc, etc.) "
+            "na aba 'Config' correspondem ao sistema atual.\n\n"
+            "Valores antigos ou incorretos podem gerar resultados muito baixos (tenebrosos) "
+            "de PR e Fill Factor."
+        )
 
     def _configurar_estilo(self):
         """Configura estilos ttk para tema escuro."""

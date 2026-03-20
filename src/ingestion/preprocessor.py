@@ -13,6 +13,22 @@ import numpy as np
 
 warnings.filterwarnings("ignore")
 
+def filtrar_periodo_noturno(df: pd.DataFrame, hora_inicio: int = 6, hora_fim: int = 18) -> pd.DataFrame:
+    """
+    Zera a geração e a irradiância durante a noite para evitar que ruídos noturnos
+    afetem os cálculos posteriores. As linhas são mantidas para não quebrar a 
+    continuidade do índice temporal (necessário para médias móveis).
+    """
+    df_filtrado = df.copy()
+    mascara_noite = (df_filtrado.index.hour < hora_inicio) | (df_filtrado.index.hour >= hora_fim)
+    
+    if 'P MPPT (W)' in df_filtrado.columns:
+        df_filtrado.loc[mascara_noite, 'P MPPT (W)'] = 0.0
+    if 'Rg Média' in df_filtrado.columns:
+        df_filtrado.loc[mascara_noite, 'Rg Média'] = 0.0
+        
+    return df_filtrado
+
 
 def _ler_inversor_csv(caminho: str) -> pd.DataFrame:
     """
@@ -195,5 +211,9 @@ def processar_inversor_clima(
     df_final.set_index('Time', inplace=True)
     df_final.dropna(subset=['P MPPT (W)'], inplace=True)
 
-    log(f"   ✓ Merge concluído: {len(df_final)} registros")
+    # Aplica o filtro noturno modular
+    df_final = filtrar_periodo_noturno(df_final)
+
+    log(f"   ✓ Merge concluído: {len(df_final)} registros (filtro noturno aplicado)")
     return df_final
+
